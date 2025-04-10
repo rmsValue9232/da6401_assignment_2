@@ -1,0 +1,14 @@
+[project]
+name = "da6401-assignment-2"
+version = "0.1.0"
+description = "Assignment 2 for DA6401"
+readme = "README.md"
+authors = [
+    { name = "Aditya Kumar", email = "adityak2117@gmail.com" }
+]
+requires-python = ">=3.9"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
