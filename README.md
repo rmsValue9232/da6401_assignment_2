@@ -13,3 +13,6 @@
 3. [10 April, 2025]:
     - Had to re-init repo anew as tracking `\data` was taking very long time.
     - Started building model for part A.
+4. [11 April, 2025]:
+    - Completed building model for part A.
+

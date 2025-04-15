@@ -47,40 +47,210 @@ pytorch_activations = {
 # the receptive field of the dropped neurons
 # may be those that do not capture the subject
 def conv_block(
+        dropout_rate: float,
         in_channels: int,
         out_channels: int,
         conv_kernel_size: int,
         padding: int,
         batchNorm: bool,
         activation: str,
-        pool_kernel_size: int
+        pool_kernel_size: int,
+        pool_stride: int
 ) -> torch.nn.Sequential:
     """Build a customisable conv-activation-maxpool layered block"""
 
     block = torch.nn.Sequential(
+        torch.nn.Dropout(p=dropout_rate),
         torch.nn.Conv2d(in_channels=in_channels,
                         out_channels=out_channels,
                         kernel_size=conv_kernel_size,
                         padding=padding)
     )
     if batchNorm:
-        block.add_module(torch.nn.BatchNorm2d(out_channels))
+        block.append(torch.nn.BatchNorm2d(out_channels))
     
-    block.add_module(pytorch_activations[activation])
-    block.add_module(torch.nn.MaxPool2d(kernel_size=pool_kernel_size))
+    block.append(pytorch_activations[activation])
+    block.append(torch.nn.MaxPool2d(kernel_size=pool_kernel_size, stride=pool_stride))
     
     return block
 
+# Find image size after being passed through the conv blocks:
+def get_image_size_after_conv_block(
+        image_size: int,
+        conv_kernel_size: int,
+        padding: int,
+        pool_kernel_size: int,
+        pool_stride: int
+) -> int:
+    """Calculate the image size after being passed through a conv block"""
+    # Formula for conv layer output size:
+    # (input_size - kernel_size + 2 * padding) / stride + 1
+    # Formula for maxpool layer output size:
+    # (input_size - kernel_size) / pool_stride + 1
+
+    # Assuming stride = 1 for conv layers
+    conv_output_size = (image_size - conv_kernel_size + 2 * padding) + 1
+    pool_output_size = (conv_output_size - pool_kernel_size)/pool_stride + 1
+
+    return pool_output_size
+
+def get_image_after_all_conv_blocks(
+        image_size: int,
+        conv_block_configs: list[tuple[float, int, int, int, int, bool, str, int, int]]
+) -> int:
+    """Calculate the image size after being passed through all conv blocks"""
+
+    for config in conv_block_configs:
+        image_size = get_image_size_after_conv_block(
+            image_size,
+            config[3],
+            config[4],
+            config[7],
+            config[8]
+        )
+    return image_size
+
+
 class SimpleCNN(pl.LightningModule):
     def __init__(self,
+                 image_size: int,
                  lr = 1e-3,
-                 conv_block_1_config: tuple[int, int, int, int, bool, str, int] = ( 3,  8, 3, True, "ReLU", 2),
-                 conv_block_2_config: tuple[int, int, int, int, bool, str, int] = ( 8, 16, 3, True, "ReLU", 2),
-                 conv_block_3_config: tuple[int, int, int, int, bool, str, int] = (16, 32, 3, True, "ReLU", 2),
-                 conv_block_4_config: tuple[int, int, int, int, bool, str, int] = (32, 64, 3, True, "ReLU", 2),
-                 conv_block_5_config: tuple[int, int, int, int, bool, str, int] = (64, 128,3, True, "ReLU", 2),
-                 hidden_dense_activation: str = "ReLU",
+                 optimizer: str = "adam" | "nesterov",
+
+                 conv_block_1_config: tuple[float, int, int, int, int, bool, str, int, int] = (0.2, 3,  8, 3, 1, True, "ReLU", 2, 2),
+                 conv_block_2_config: tuple[float, int, int, int, int, bool, str, int, int] = (0.2, 8, 16, 3, 1, True, "ReLU", 2, 2),
+                 conv_block_3_config: tuple[float, int, int, int, int, bool, str, int, int] = (0.2,16, 32, 3, 1, True, "ReLU", 2, 2),
+                 conv_block_4_config: tuple[float, int, int, int, int, bool, str, int, int] = (0.2,32, 64, 3, 1, True, "ReLU", 2, 2),
+                 conv_block_5_config: tuple[float, int, int, int, int, bool, str, int, int] = (0.2,64,128, 3, 1, True, "ReLU", 2, 2),
+
                  hidden_dense_neurons: int = 512,
+                 hidden_dense_dropout: float = 0.5,
+                 hidden_dense_activation: str = "ReLU",
+                 hidden_dense_batchNorm: bool = True,
                  output_activation: str = "Softmax"
                  ):
-        super(SimpleCNN).__init__()
+        super(SimpleCNN, self).__init__()
+        self.image_size = image_size
+        self.lr = lr
+        self.optimizer = optimizer
+
+        # Calculate the output size after the conv blocks
+        self.conv_output_size = get_image_after_all_conv_blocks(
+            image_size = image_size,
+            conv_block_configs = [conv_block_1_config,
+                                    conv_block_2_config,
+                                    conv_block_3_config,
+                                    conv_block_4_config,
+                                    conv_block_5_config]
+        )
+        self.conv_output_size = int(self.conv_output_size)
+
+        # Build the conv blocks
+        self.conv_blocks = torch.nn.Sequential(
+            conv_block(*conv_block_1_config),
+            conv_block(*conv_block_2_config),
+            conv_block(*conv_block_3_config),
+            conv_block(*conv_block_4_config),
+            conv_block(*conv_block_5_config)
+        )
+
+        # Build the flatten layer
+        self.flatter = torch.nn.Flatten()
+
+        # Build the dense layer
+        self.hidden_dense_neurons = hidden_dense_neurons
+        self.hidden_dense_dropout = hidden_dense_dropout
+        self.hidden_dense_activation = hidden_dense_activation
+        self.hidden_dense_batchNorm = hidden_dense_batchNorm
+        self.hidden_dense = torch.nn.Sequential(
+            torch.nn.Dropout(p=self.hidden_dense_dropout),
+            torch.nn.Linear(self.conv_output_size * conv_block_5_config[2], self.hidden_dense_neurons),
+            pytorch_activations[self.hidden_dense_activation]
+        )
+        if self.hidden_dense_batchNorm:
+            self.hidden_dense.append(torch.nn.BatchNorm1d(self.hidden_dense_neurons))
+        
+        # Build the output layer
+        self.output_activation = output_activation
+        self.output_layer = torch.nn.Linear(self.hidden_dense_neurons, 10)
+
+        self.save_hyperparameters()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Pass the input through the conv blocks
+        x = self.conv_blocks(x)
+
+        # Flatten the input
+        x = self.flatter(x)
+
+        # Pass the input through the dense layers
+        x = self.hidden_dense(x)
+        x = self.output_layer(x)
+
+        # Returns the logits as pytorch cross entropy itself uses logits
+        # and not the probabilities
+        return x
+    
+    def _get_loss_and_metrics(self, batch: torch.Tensor):
+        X, Y = batch
+        logits = self(X)
+        
+        # Probability vectors for record keeping
+        with torch.no_grad:
+            Y_hat = torch.nn.functional.softmax(logits, dim=1) 
+        # Pick the max index of the output
+        # max_indices = torch.argmax(Y_hat, dim=1, keepdim=True)
+        # Create a one-hot encoded tensor with the same shape as Y_hat
+        # preds = torch.zeros_like(Y_hat).scatter_(1, max_indices, 1)
+
+        loss = torch.nn.functional.cross_entropy(logits, Y)
+        acc = metricfunctions.accuracy(logits, Y)
+        precision = metricfunctions.precision(logits, Y)
+        recall = metricfunctions.recall(logits, Y)
+        f1 = metricfunctions.f1_score(logits, Y)
+
+        return Y_hat, loss, acc, precision, recall, f1
+    
+    def configure_optimizers(self):
+        if self.optimizer == "adam":
+            return torch.optim.Adam(self.parameters(), lr=self.lr)
+        elif self.optimizer == "nesterov":
+            return torch.optim.SGD(self.parameters(), lr=self.lr, momentum=0.9, nesterov=True)
+    
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        _, loss, acc, precision, recall, f1 = self._get_loss_and_metrics(batch)
+        batch_size = len(batch[0])
+
+        self.log("train_loss", loss, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("train_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("train_precision", precision, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("train_recall", recall, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("train_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size)
+
+        return loss
+    
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        _, loss, acc, precision, recall, f1 = self._get_loss_and_metrics(batch)
+        batch_size = len(batch[0])
+
+        self.log("val_loss", loss, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("val_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("val_precision", precision, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("val_recall", recall, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("val_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size)
+
+        return loss
+    
+    def test_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        _, loss, acc, precision, recall, f1 = self._get_loss_and_metrics(batch)
+        batch_size = len(batch[0])
+
+        self.log("test_loss", loss, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("test_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("test_precision", precision, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("test_recall", recall, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("test_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size)
+
+        return loss
+    
+    
