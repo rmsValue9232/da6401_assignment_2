@@ -37,8 +37,6 @@ pytorch_activations = {
     "Threshold": torch.nn.Threshold(threshold=0, value=0),
 }
 
-# TODO: Add dropout layers to the conv blocks
-
 # Adding dropout on conv block neurons makes
 # those neurons' receptive field in the image
 # not participate in the training process
@@ -115,7 +113,7 @@ class SimpleCNN(pl.LightningModule):
     def __init__(self,
                  image_size: int,
                  lr = 1e-3,
-                 optimizer: str = "adam" | "nesterov",
+                 optimizer: str = "adam",
 
                  conv_block_1_config: tuple[float, int, int, int, int, bool, str, int, int] = (0.2, 3,  8, 3, 1, True, "ReLU", 2, 2),
                  conv_block_2_config: tuple[float, int, int, int, int, bool, str, int, int] = (0.2, 8, 16, 3, 1, True, "ReLU", 2, 2),
@@ -164,7 +162,7 @@ class SimpleCNN(pl.LightningModule):
         self.hidden_dense_batchNorm = hidden_dense_batchNorm
         self.hidden_dense = torch.nn.Sequential(
             torch.nn.Dropout(p=self.hidden_dense_dropout),
-            torch.nn.Linear(self.conv_output_size * conv_block_5_config[2], self.hidden_dense_neurons),
+            torch.nn.Linear((self.conv_output_size**2) * conv_block_5_config[2], self.hidden_dense_neurons),
             pytorch_activations[self.hidden_dense_activation]
         )
         if self.hidden_dense_batchNorm:
@@ -193,21 +191,29 @@ class SimpleCNN(pl.LightningModule):
     
     def _get_loss_and_metrics(self, batch: torch.Tensor):
         X, Y = batch
+
+        # Convert one hot encoded vector to integer label for each sample in the batch
+        # Shape becomes from (batch_size, num_classes) to (batch_size,)
+        targets = torch.argmax(Y, dim = 1)
+        
+        # Find the network's predictions
         logits = self(X)
         
         # Probability vectors for record keeping
-        with torch.no_grad:
-            Y_hat = torch.nn.functional.softmax(logits, dim=1) 
-        # Pick the max index of the output
-        # max_indices = torch.argmax(Y_hat, dim=1, keepdim=True)
-        # Create a one-hot encoded tensor with the same shape as Y_hat
-        # preds = torch.zeros_like(Y_hat).scatter_(1, max_indices, 1)
+        Y_hat = torch.nn.functional.softmax(logits, dim=1)
+        
+        # Find the predicted classes
+        # Shape becomes from (batch_size, num_classes) to (batch_size,)
+        preds = torch.argmax(Y_hat, dim=1)
 
-        loss = torch.nn.functional.cross_entropy(logits, Y)
-        acc = metricfunctions.accuracy(logits, Y)
-        precision = metricfunctions.precision(logits, Y)
-        recall = metricfunctions.recall(logits, Y)
-        f1 = metricfunctions.f1_score(logits, Y)
+        # Calculate loss
+        loss = torch.nn.functional.cross_entropy(logits, targets)
+
+        # Calculate metrics
+        acc = metricfunctions.accuracy(preds, targets, task='multiclass', num_classes=10)
+        precision = metricfunctions.precision(preds, targets, task='multiclass', num_classes=10, average='macro')
+        recall = metricfunctions.recall(preds, targets, task='multiclass', num_classes=10, average='macro')
+        f1 = metricfunctions.f1_score(preds, targets, task='multiclass', num_classes=10, average='macro')
 
         return Y_hat, loss, acc, precision, recall, f1
     
@@ -221,11 +227,11 @@ class SimpleCNN(pl.LightningModule):
         _, loss, acc, precision, recall, f1 = self._get_loss_and_metrics(batch)
         batch_size = len(batch[0])
 
-        self.log("train_loss", loss, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("train_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("train_precision", precision, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("train_recall", recall, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("train_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("train_loss", loss, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("train_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("train_precision", precision, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("train_recall", recall, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("train_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
 
         return loss
     
@@ -233,11 +239,11 @@ class SimpleCNN(pl.LightningModule):
         _, loss, acc, precision, recall, f1 = self._get_loss_and_metrics(batch)
         batch_size = len(batch[0])
 
-        self.log("val_loss", loss, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("val_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("val_precision", precision, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("val_recall", recall, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("val_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("val_loss", loss, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("val_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("val_precision", precision, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("val_recall", recall, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("val_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
 
         return loss
     
@@ -245,11 +251,11 @@ class SimpleCNN(pl.LightningModule):
         _, loss, acc, precision, recall, f1 = self._get_loss_and_metrics(batch)
         batch_size = len(batch[0])
 
-        self.log("test_loss", loss, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("test_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("test_precision", precision, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("test_recall", recall, prog_bar=True, logger=True, batch_size=batch_size)
-        self.log("test_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("test_loss", loss, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("test_accuracy", acc, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("test_precision", precision, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("test_recall", recall, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
+        self.log("test_f1score", f1, prog_bar=True, logger=True, batch_size=batch_size, sync_dist=True)
 
         return loss
     

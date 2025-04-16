@@ -15,4 +15,3 @@
     - Started building model for part A.
 4. [11 April, 2025]:
     - Completed building model for part A.
-

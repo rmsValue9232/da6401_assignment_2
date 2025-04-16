@@ -1,7 +1,6 @@
 from torch.utils.data import Dataset, DataLoader, Subset
 from lightning import LightningDataModule
 import torchvision.transforms as transforms
-import torch.nn.functional as F
 import torch
 from PIL import Image
 import random
@@ -122,10 +121,26 @@ class OneHotEncoder:
     def __init__(self, num_classes: int):
         self.num_classes = num_classes
 
-    def __call__(self, label: torch.Tensor) -> torch.Tensor:
+    def __call__(self, label: int) -> torch.Tensor:
         """Convert the label to one-hot encoding."""
-        
-        return F.one_hot(label, num_classes=self.num_classes).float()
+        one_hot = torch.zeros(self.num_classes, dtype=torch.float32)
+        one_hot[label] = 1.0
+        return one_hot
+
+class AugmentedDataset(Dataset):
+    """Applies augmenting transforms to the provided Dataset."""
+    def __init__(self, dataset: Dataset, transform: callable = None):
+        self.dataset = dataset
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> tuple:
+        image, label = self.dataset[idx]
+        if self.transform:
+            image = self.transform(image)
+        return image, label
 
 class INaturalistDataloader(LightningDataModule):
     """Lightning dataloader for the iNaturalist dataset."""
@@ -135,20 +150,22 @@ class INaturalistDataloader(LightningDataModule):
                  num_workers: int = 0,
                  valid_ratio: float = 0.2,
                  shuffle: bool = True,
-                 shuffle_seed: int = 42):
+                 shuffle_seed: int = 42,
+                 augment_train_data: bool = True):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.valid_ratio = valid_ratio
         self.shuffle = shuffle
         self.shuffle_seed = shuffle_seed
+        self.augment_train_data = augment_train_data
 
     def setup(self, stage: str = 'fit') -> None:
         """Setup the dataset for training and validation."""
 
         # Define the image transform so that the batch is consistent
         self.transform = transforms.Compose([
-            transforms.Resize(size=(400, 400)),
+            transforms.Resize(size=(128, 128)),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=[0.485, 0.456, 0.406],
@@ -157,10 +174,7 @@ class INaturalistDataloader(LightningDataModule):
         ])
 
         # Define the target transform for one-hot encoding of integer labels
-        self.target_transform = transforms.Compose([
-            transforms.ToTensor(),
-            OneHotEncoder(num_classes=len(os.listdir('../../data/train')))
-        ])
+        self.target_transform = OneHotEncoder(num_classes=len(os.listdir('../../data/train')))
 
         if stage == 'fit':
             # Create the dataset instances for training and validation
@@ -171,6 +185,16 @@ class INaturalistDataloader(LightningDataModule):
                                                                     valid_ratio=self.valid_ratio,
                                                                     shuffle=self.shuffle,
                                                                     shuffle_seed=self.shuffle_seed)
+            
+            # Apply the augmenting transforms to the training dataset if specified
+            if self.augment_train_data:
+                self.train_augment_transform = transforms.Compose([
+                    transforms.RandomHorizontalFlip(),
+                    transforms.RandomVerticalFlip(),
+                    transforms.RandomRotation(10),
+                    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)  
+                ])
+                self.dataset_train = AugmentedDataset(self.dataset_train, transform=self.train_augment_transform)
         
         if stage == 'test' or stage is None:
             # Create the test dataset instance
