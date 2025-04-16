@@ -15,3 +15,7 @@
     - Started building model for part A.
 4. [11 April, 2025]:
     - Completed building model for part A.
+5. [16 April, 2025]:
+    - Completed hyperparameter sweeping functionalities provided in `train.py`.
+    - Fixed bugs in model for part A.
+    - Added data augmenting capabilities to dataloader.
