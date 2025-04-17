@@ -180,19 +180,119 @@ def train(params: dict = None) -> None:
 
     wandb.finish()
 
+refined_sweep_config = {
+    'method': 'bayes',
+    'metric': {
+        'name': 'val_accuracy',
+        'goal': 'maximize'
+    },
+    'parameters': {
+        'augment_train_data': {
+            'values': [True, False]
+        },
+        'dropout_5': {
+            'values': [0.2, 0.3, 0.4, 0.5]
+        },
+        'hidden_dense_dropout': {
+            'values': [0.0, 0.1, 0.2, 0.3]
+        },
+        'kernel_size_1': {
+            'values': [1,3,5]
+        },
+        'batch_size': {
+            'values': [8, 16, 32, 64]
+        },
+        'pool_size_4': {
+            'values': [1, 2, 3]
+        },
+        'pool_stride_5': {
+            'values': [2, 3, 4]
+        },
+        'batch_norm_1': {
+            'values': [True, False]
+        },
+        'pool_size_5': {
+            'values': [1, 2, 3]
+        },
+        'pool_stride_4': {
+            'values': [2, 3, 4]
+        },
+        'pool_stride_2': {
+            'values': [2, 3, 4]
+        }
+    }
+}
 
+def refined_train() -> None:
+    """Train the model using the refined sweep configuration."""
+    wandb.init()
+    
+    data_module = INaturalistDataloader(
+        batch_size = wandb.config['batch_size'],
+        num_workers = 2,
+        augment_train_data= wandb.config['augment_train_data']
+    )
 
-def sweeper(sweep_config: dict, max_runs: int = 5) -> None:
+    data_module.setup(stage = 'fit')
+
+    wandb_logger = WandbLogger(save_dir='runs')
+    wandb_logger.log_hyperparams(wandb.config)
+    my_CNN = model.SimpleCNN(
+        image_size = 128,
+        lr = 0.001,
+        optimizer = 'nesterov',
+
+        conv_block_1_config = (0,3,128,wandb.config['kernel_size_1'] ,(wandb.config['kernel_size_1'] - 1)//2, wandb.config['batch_norm_1'],'ReLU',4,2),
+        conv_block_2_config = (0,128,64,5,2, True,'SELU', 1,wandb.config['pool_stride_2']),
+        conv_block_3_config = (0.3,64,64,7,3, False,'ReLU', 1,2),
+        conv_block_4_config = (0.2,64,128,5,2, True,'ReLU', wandb.config['pool_size_4'],wandb.config['pool_stride_4']),
+        conv_block_5_config = (wandb.config['dropout_5'],128,64,7,3, True,'SELU',wandb.config['pool_size_5'],wandb.config['pool_stride_5']),
+
+        hidden_dense_neurons = 256,
+        hidden_dense_dropout = wandb.config['hidden_dense_dropout'],
+        hidden_dense_activation = 'ELU',
+        hidden_dense_batchNorm = False
+    )
+
+    # Watch the model
+    wandb_logger.watch(my_CNN, log_graph=True)
+
+    # Define the callbacks
+    checkpoint_callback = ModelCheckpoint(
+        monitor = 'val_accuracy',
+        mode = 'max',
+        filename = 'val_acc_{val_accuracy:.2f}',
+    )
+
+    early_stopping_callback = EarlyStopping(
+        monitor = 'val_accuracy',
+        mode = 'max',
+        patience= wandb.config['batch_size']
+    )
+
+    # Define the trainer
+    trainer = Trainer(
+        max_epochs = 50,
+        logger = wandb_logger,
+        callbacks = [checkpoint_callback, early_stopping_callback],
+        devices = 2,
+    )
+
+    # Train the model
+    trainer.fit(model = my_CNN, datamodule = data_module)
+    wandb.finish()
+
+def sweeper(sweep_config: dict, max_runs: int = 5, trainfunc: callable = train) -> None:
     """Initialize the sweep and start the training."""
     # Initialize the sweep
     sweep_id = wandb.sweep(sweep = sweep_config, project = 'DA6401_assign_2_part_A')
     # Start the sweep agent
-    wandb.agent(sweep_id, function = train, count = max_runs)
+    wandb.agent(sweep_id, function = trainfunc, count = max_runs)
 
 def main():
     wandb.login()
     sweeper(
         sweep_config = sweep_configuration,
-        max_runs = 20 # Number of runs for the sweep
+        max_runs = 10 # Number of runs for the sweep
     )
 
