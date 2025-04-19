@@ -21,6 +21,7 @@
     - Added data augmenting capabilities to dataloader.
 6. [17 April, 2025]:
     - Completed broad and focused hyperparameter sweeps for part A.
+    - Added integer label to string label utility to dataloader.
     - Completed a best parameter model train and evaluation.
 7. [18 April, 2025]:
     - Read up about fine tuning strategies with layer freezing for part B.
