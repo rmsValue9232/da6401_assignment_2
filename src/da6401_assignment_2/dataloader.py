@@ -199,6 +199,7 @@ class INaturalistDataloader(LightningDataModule):
         if stage == 'test' or stage is None:
             # Create the test dataset instance
             self.dataset_test = INaturalistDataset(kind='test', transform=self.transform, target_transform=self.target_transform)
+            self.img_classes = self.dataset_test.img_classes
 
     def train_dataloader(self) -> DataLoader:
         """Return the training dataloader."""
